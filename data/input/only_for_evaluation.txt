@@ -1,0 +1,2 @@
+Original and degraded images for evaluation. The original images are in the "original" folder, and the degraded images are in the "degraded" folder.
+Each image in the "degraded" folder corresponds to an image in the "original" folder with the same filename.
