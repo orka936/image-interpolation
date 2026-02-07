@@ -1,0 +1,14 @@
+# Dataset & generated outputs
+data/
+user/output/
+user/output_recon/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+env/
+
+# OS
+.DS_Store
+Thumbs.db

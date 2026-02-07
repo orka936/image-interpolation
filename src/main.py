@@ -1,65 +1,115 @@
 import numpy as np
-from utils.image_io import load_image, save_image
-from interpolation.bilinear import bilinear_interpolation
-from interpolation.bicubic import bicubic_interpolation
-from interpolation.spline import spline_interpolation
+import torch
+from PIL import Image
+
+from src.utils.image_io import load_image, save_image
+from src.interpolation.bicubic import bicubic_interpolation
+from src.interpolation.bilinear import bilinear_upscale_vectorized
+from src.interpolation.spline import spline_upscale_fast
+from src.neural_network.srcnn_model import SRCNN
+
+
+def rgb_to_ycbcr(img):
+    img = img.astype(np.float32)
+    y  = 0.299 * img[:,:,0] + 0.587 * img[:,:,1] + 0.114 * img[:,:,2]
+    cb = -0.1687 * img[:,:,0] - 0.3313 * img[:,:,1] + 0.5 * img[:,:,2] + 128
+    cr = 0.5 * img[:,:,0] - 0.4187 * img[:,:,1] - 0.0813 * img[:,:,2] + 128
+    return y, cb, cr
+
+
+def ycbcr_to_rgb(y, cb, cr):
+    r = y + 1.402 * (cr - 128)
+    g = y - 0.34414 * (cb - 128) - 0.71414 * (cr - 128)
+    b = y + 1.772 * (cb - 128)
+    img = np.stack([r, g, b], axis=2)
+    return np.clip(img, 0, 255).astype(np.uint8)
+
 
 def main():
-
-    # Učitaj sliku - OVO ĆE RADITI
     img = load_image("user/input/input_image.png")
-    print(f"\nOriginal slika shape: {img.shape}")
+    print("Original shape:", img.shape)
 
     print("\n========== Upscaling ==========")
-    print("1 Bilinearna interpolacija")
-    print("2 Bikubna interpolacija")
-    print("3 Spline interpolacija")
+    print("Opcije interpolacije:")
+    print("1 - Bicubic")
+    print("2 - Bilinear")
+    print("3 - Spline")
+    print("4 - Bicubic + SRCNN (Y-channel)")
+    print("5 - Spline + SRCNN (Y-channel)")
+    print("6 - Bilinear + SRCNN (Y-channel)")
     print("===============================")
-    opcija=int(input("Izaberite opciju za upscaling: "))
 
-    # 1. Upscaling - OVO ĆE RADITI
-    print("\nUpscaling...")
-    
-    if opcija==1:
-        img_bilinear = bilinear_interpolation(img)
-        save_image(img_bilinear, "user/output/output_bilinear.png")
+    opcija = int(input("Unesite opciju (1-6): "))
 
-    if opcija==2:
-        img_bicubic = bicubic_interpolation(img)
-        save_image(img_bicubic, "user/output/output_bicubic.png")
+    # RGB → YCbCr
+    y, cb, cr = rgb_to_ycbcr(img)
 
-    if opcija==3:
-        img_spline = spline_interpolation(img)
-        save_image(img_spline, "user/output/output_spline.png")
+    SCALE = 4  # primer, zavisi od tvog treniranja
 
-    print("Upscaled slika je sačuvana.")
+    if opcija == 1:
+        y_up = bicubic_interpolation(y, scale_factor=SCALE)
+        cb_up = bicubic_interpolation(cb, scale_factor=SCALE)
+        cr_up = bicubic_interpolation(cr, scale_factor=SCALE)
+        out_name = "user/output/output_bicubic.png"
 
-    h, w, _ = img.shape
-    missing_mask = np.random.rand(h, w) > 0.9
-    img_missing = img.copy()
-    img_missing[missing_mask == 1] = 0
+    elif opcija == 2:
+        y_up = bilinear_upscale_vectorized(y, scale_factor=SCALE)
+        cb_up = bilinear_upscale_vectorized(cb, scale_factor=SCALE)
+        cr_up = bilinear_upscale_vectorized(cr, scale_factor=SCALE)
+        out_name = "user/output/output_bilinear.png"
 
-    print("\n===== Rekonstrukcija piksela =====")
-    print("1 Bilinearna rekonstrukcija")
-    print("2 Bikubna rekonstrukcija")
-    print("3 Spline rekonstrukcija")
-    print("===================================")
-    opcija=int(input("\nOpcija za rekonstrukciju piksela: "))
-    print("\nRekonstrukcija nedostajućih piksela...")
+    elif opcija == 3:
+        y_up = spline_upscale_fast(y, scale_factor=SCALE)
+        cb_up = spline_upscale_fast(cb, scale_factor=SCALE)
+        cr_up = spline_upscale_fast(cr, scale_factor=SCALE)
+        out_name = "user/output/output_spline.png"
 
-    if opcija==1:
-        recon_bilinear = bilinear_interpolation(img_missing, missing_mask=missing_mask)
-        save_image(recon_bilinear, "user/output_recon/recon_bilinear.png")
+    # SRCNN opcije
+    elif opcija == 4:
+        y_up  = bicubic_interpolation(y, scale_factor=SCALE)
+        cb_up = bicubic_interpolation(cb, scale_factor=SCALE)
+        cr_up = bicubic_interpolation(cr, scale_factor=SCALE)
+        y_tensor = torch.from_numpy(y_up / 255.0).float().unsqueeze(0).unsqueeze(0)
+        model = SRCNN()
+        model.load_state_dict(torch.load("models/srcnn_y.pth", map_location="cpu"))
+        model.eval()
+        with torch.no_grad():
+            y_up = model(y_tensor).squeeze().numpy() * 255.0
+        out_name = "user/output/output_bicubic_srcnn.png"
 
-    if opcija==2:
-        recon_bicubic = bicubic_interpolation(img_missing, missing_mask=missing_mask)
-        save_image(recon_bicubic, "user/output_recon/recon_bicubic.png")
+    elif opcija == 5:
+        y_up  = spline_upscale_fast(y, scale_factor=SCALE)
+        cb_up = spline_upscale_fast(cb, scale_factor=SCALE)
+        cr_up = spline_upscale_fast(cr, scale_factor=SCALE)
+        y_tensor = torch.from_numpy(y_up / 255.0).float().unsqueeze(0).unsqueeze(0)
+        model = SRCNN()
+        model.load_state_dict(torch.load("models/srcnn_y.pth", map_location="cpu"))
+        model.eval()
+        with torch.no_grad():
+            y_up = model(y_tensor).squeeze().numpy() * 255.0
+        out_name = "user/output/output_spline_srcnn.png"
 
-    if opcija==3:
-        recon_spline = spline_interpolation(img_missing, missing_mask=missing_mask)
-        save_image(recon_spline, "user/output_recon/recon_spline.png")
+    elif opcija == 6:
+        y_up  = bilinear_upscale_vectorized(y, scale_factor=SCALE)
+        cb_up = bilinear_upscale_vectorized(cb, scale_factor=SCALE)
+        cr_up = bilinear_upscale_vectorized(cr, scale_factor=SCALE)
+        y_tensor = torch.from_numpy(y_up / 255.0).float().unsqueeze(0).unsqueeze(0)
+        model = SRCNN()
+        model.load_state_dict(torch.load("models/srcnn_y.pth", map_location="cpu"))
+        model.eval()
+        with torch.no_grad():
+            y_up = model(y_tensor).squeeze().numpy() * 255.0
+        out_name = "user/output/output_bilinear_srcnn.png"
 
-    print("Rekonstruisana slika je sačuvana.\n")
+    else:
+        print("Nepoznata opcija!")
+        return
+
+    # Spoji kanale i sacuvaj
+    sr_rgb = ycbcr_to_rgb(y_up, cb_up, cr_up)
+    save_image(sr_rgb, out_name)
+    print(f"Output saved: {out_name}")
+
 
 if __name__ == "__main__":
     main()

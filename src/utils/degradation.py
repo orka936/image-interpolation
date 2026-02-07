@@ -1,17 +1,14 @@
 # downsampling, maskiranje piksela
 import numpy as np
+from PIL import Image
 
-
-def downsample_image(image, scale_factor):
-    h, w, c = image.shape
-    new_h = h // scale_factor
-    new_w = w // scale_factor
-
-    downsampled = image[0:new_h * scale_factor:scale_factor,
-                         0:new_w * scale_factor:scale_factor,
-                         :]
-    return downsampled
-
+def downsample_image(image: np.ndarray, scale_factor: int) -> np.ndarray:
+    """Downsample image with bicubic interpolation."""
+    img_pil = Image.fromarray(np.uint8(image))
+    new_w = img_pil.width // scale_factor
+    new_h = img_pil.height // scale_factor
+    img_small = img_pil.resize((new_w, new_h), resample=Image.BICUBIC)
+    return np.array(img_small)
 
 def remove_pixels(image, missing_ratio):
     corrupted = image.copy()
