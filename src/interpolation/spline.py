@@ -1,79 +1,146 @@
 import numpy as np
-from scipy.interpolate import RectBivariateSpline, griddata
 
-def spline_interpolation(image, scale_factor=2, missing_mask=None):
+def spline_interpolation(image, scale_factor=4, missing_mask=None):
     """
-    OPTIMIZOVANA spline interpolacija.
+    Optimizovana spline interpolacija.
     """
     if missing_mask is None:
-        return spline_upscale(image, scale_factor)
+        return spline_upscale_fast(image, scale_factor)
     else:
-        return spline_reconstruct(image, missing_mask)
+        return spline_reconstruct_fast(image, missing_mask)
 
-def spline_upscale(image, scale_factor):
-    """Spline interpolacija za upscaling."""
+def spline_upscale_fast(image, scale_factor):
+    """Brza spline interpolacija koristeći separabilnost."""
     if len(image.shape) == 3:
         h, w, c = image.shape
         new_h, new_w = int(h * scale_factor), int(w * scale_factor)
+        
         result = np.zeros((new_h, new_w, c), dtype=np.float32)
+        
+        # Prvo uvećaj po redovima, pa po kolonama
         for ch in range(c):
-            result[:, :, ch] = spline_upscale_channel(image[:, :, ch], scale_factor)
+            channel = image[:, :, ch]
+            
+            # 1. Interpolacija po redovima
+            temp = np.zeros((h, new_w), dtype=np.float32)
+            
+            # Kreiraj koordinate
+            x_old = np.arange(w)
+            x_new = np.linspace(0, w-1, new_w)
+            
+            for row in range(h):
+                # Koristi NumPy interpolaciju za brzinu (linear je dovoljno brz)
+                temp[row, :] = np.interp(x_new, x_old, channel[row, :])
+            
+            # 2. Interpolacija po kolonama
+            y_old = np.arange(h)
+            y_new = np.linspace(0, h-1, new_h)
+            
+            for col in range(new_w):
+                result[:, col, ch] = np.interp(y_new, y_old, temp[:, col])
+        
         return result
     else:
-        return spline_upscale_channel(image, scale_factor)
+        # Za jednokanalne slike
+        h, w = image.shape
+        new_h, new_w = int(h * scale_factor), int(w * scale_factor)
+        
+        # Interpolacija po redovima
+        temp = np.zeros((h, new_w), dtype=np.float32)
+        x_old = np.arange(w)
+        x_new = np.linspace(0, w-1, new_w)
+        
+        for row in range(h):
+            temp[row, :] = np.interp(x_new, x_old, image[row, :])
+        
+        # Interpolacija po kolonama
+        result = np.zeros((new_h, new_w), dtype=np.float32)
+        y_old = np.arange(h)
+        y_new = np.linspace(0, h-1, new_h)
+        
+        for col in range(new_w):
+            result[:, col] = np.interp(y_new, y_old, temp[:, col])
+        
+        return result
 
-def spline_upscale_channel(channel, scale_factor):
-    """Spline interpolacija za jedan kanal."""
-    h, w = channel.shape
-    new_h, new_w = int(h * scale_factor), int(w * scale_factor)
-    
-    # Kreiraj spline interpolator
-    x = np.arange(w)
-    y = np.arange(h)
-    spline = RectBivariateSpline(y, x, channel, kx=3, ky=3)
-    
-    # Kreiraj nove koordinate
-    x_new = np.linspace(0, w-1, new_w)
-    y_new = np.linspace(0, h-1, new_h)
-    
-    # Interpolacija
-    return spline(y_new, x_new)
-
-def spline_reconstruct(image, missing_mask):
-    """Rekonstrukcija nedostajućih piksela spline-om."""
+def spline_reconstruct_fast(image, missing_mask):
+    """Brza rekonstrukcija spline-om."""
     if len(image.shape) == 3:
+        h, w, c = image.shape
         result = np.zeros_like(image)
-        for ch in range(image.shape[2]):
-            result[:, :, ch] = spline_reconstruct_channel(image[:, :, ch], missing_mask)
+        
+        for ch in range(c):
+            result[:, :, ch] = spline_reconstruct_channel_fast(image[:, :, ch], missing_mask)
+        
         return result
     else:
-        return spline_reconstruct_channel(image, missing_mask)
+        return spline_reconstruct_channel_fast(image, missing_mask)
 
-def spline_reconstruct_channel(channel, missing_mask):
-    """Rekonstrukcija koristeći griddata (već optimizovano u scipy)."""
+def spline_reconstruct_channel_fast(channel, missing_mask):
+    """Rekonstrukcija koristeći iterativno popunjavanje."""
     h, w = channel.shape
+    output = channel.copy()
     
-    # Koordinate gde su pikseli poznati
-    known_y, known_x = np.where(missing_mask == 0)
-    known_values = channel[known_y, known_x]
+    # Kreiraj kopiju maske za praćenje
+    remaining_mask = missing_mask.copy()
     
-    # Koordinate gde pikseli nedostaju
-    missing_y, missing_x = np.where(missing_mask == 1)
+    # Broj nedostajućih piksela
+    remaining_count = np.sum(remaining_mask)
     
-    if len(missing_y) == 0:
-        return channel.copy()
+    # Iterativno popunjavanje
+    iteration = 0
+    max_iterations = 5
     
-    # Interpolacija koristeći griddata sa linearnom metodom (brže od cubic)
-    interp_values = griddata(
-        (known_y, known_x), 
-        known_values, 
-        (missing_y, missing_x), 
-        method='linear',  # možete promeniti u 'cubic' ako je potrebno
-        fill_value=0.0
-    )
+    while remaining_count > 0 and iteration < max_iterations:
+        iteration += 1
+        
+        # Pronađi nedostajuće piksele koji imaju najmanje 3 suseda
+        missing_y, missing_x = np.where(remaining_mask)
+        filled_count = 0
+        
+        for idx in range(len(missing_y)):
+            i, j = missing_y[idx], missing_x[idx]
+            
+            # Proveri 3x3 okolinu
+            i_min, i_max = max(0, i-1), min(h, i+2)
+            j_min, j_max = max(0, j-1), min(w, j+2)
+            
+            neighborhood = output[i_min:i_max, j_min:j_max]
+            neighborhood_mask = remaining_mask[i_min:i_max, j_min:j_max]
+            
+            # Broj validnih suseda
+            valid_count = np.sum(~neighborhood_mask)
+            
+            if valid_count >= 3:
+                # Izračunaj vrednost na osnovu suseda
+                valid_values = neighborhood[~neighborhood_mask]
+                output[i, j] = np.mean(valid_values)
+                remaining_mask[i, j] = False
+                filled_count += 1
+        
+        # Ako nismo popunili nijedan piksel, izađi
+        if filled_count == 0:
+            break
+        
+        remaining_count = np.sum(remaining_mask)
     
-    # Popuni nedostajuće vrednosti
-    result = channel.copy()
-    result[missing_y, missing_x] = interp_values
+    # Za preostale piksele, koristi jednostavniji pristup
+    if remaining_count > 0:
+        missing_y, missing_x = np.where(remaining_mask)
+        
+        for idx in range(len(missing_y)):
+            i, j = missing_y[idx], missing_x[idx]
+            
+            # Proširi okolinu ako je potrebno
+            i_min, i_max = max(0, i-2), min(h, i+3)
+            j_min, j_max = max(0, j-2), min(w, j+3)
+            
+            neighborhood = output[i_min:i_max, j_min:j_max]
+            neighborhood_mask = remaining_mask[i_min:i_max, j_min:j_max]
+            
+            valid_values = neighborhood[~neighborhood_mask]
+            
+            if len(valid_values) > 0:
+                output[i, j] = np.mean(valid_values)
     
-    return result
+    return output
