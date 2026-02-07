@@ -1,4 +1,5 @@
 import numpy as np
+from collections import defaultdict
 
 def cubic_interpolate(p, x):
     """
@@ -169,7 +170,6 @@ def bicubic_reconstruct_channel_optimized(channel, missing_mask):
         return output
     
     # Grupiši po redovima za bolju lokalnost
-    from collections import defaultdict
     rows_dict = defaultdict(list)
     
     for idx in range(len(missing_y)):
@@ -188,21 +188,31 @@ def bicubic_reconstruct_channel_optimized(channel, missing_mask):
             neighborhood = channel[y_min:y_max, x_min:x_max]
             neighborhood_mask = missing_mask[y_min:y_max, x_min:x_max]
             
+            # Ravnaj oba niza za indeksiranje
+            neighborhood_flat = neighborhood.ravel()
+            neighborhood_mask_flat = neighborhood_mask.ravel()
+            
             # Ukloni nedostajuće piksele
-            valid_values = neighborhood[~neighborhood_mask]
+            valid_values = neighborhood_flat[~neighborhood_mask_flat]
             
             if len(valid_values) > 0:
                 # Ponderisani prosek (bliži pikseli imaju veću težinu)
-                # Kreiraj težine na osnovu udaljenosti
-                center_y, center_x = y - y_min, x - x_min
-                distances = np.sqrt(
-                    (np.arange(neighborhood.shape[0]) - center_y)**2 + 
-                    (np.arange(neighborhood.shape[1]) - center_x)**2
+                # Kreiraj mrežu koordinata za celu okolinu
+                y_coords, x_coords = np.meshgrid(
+                    np.arange(y_min, y_max),
+                    np.arange(x_min, x_max),
+                    indexing='ij'
                 )
-                distances = distances[~neighborhood_mask]
+                
+                # Izračunaj udaljenosti od centra
+                distances = np.sqrt((y_coords - y)**2 + (x_coords - x)**2)
+                distances_flat = distances.ravel()
+                
+                # Ukloni nedostajuće piksele iz udaljenosti
+                valid_distances = distances_flat[~neighborhood_mask_flat]
                 
                 # Inverzna težinska funkcija
-                weights = 1.0 / (distances + 1e-6)
+                weights = 1.0 / (valid_distances + 1e-6)
                 weights = weights / np.sum(weights)
                 
                 output[y, x] = np.dot(valid_values, weights)

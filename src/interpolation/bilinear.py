@@ -2,7 +2,7 @@ import numpy as np
 
 def bilinear_interpolation(image, scale_factor=4, missing_mask=None):
     """
-    OPTIMIZOVANA bilinearna interpolacija sa vektorizacijom.
+    Optimizovana bilinearna interpolacija sa vektorizacijom.
     """
     if missing_mask is None:
         return bilinear_upscale_vectorized(image, scale_factor)
@@ -75,7 +75,7 @@ def bilinear_upscale_vectorized(image, scale_factor):
                wy[:, None] * wx * q11
 
 def bilinear_reconstruct_vectorized(image, missing_mask):
-    """Vektorizovana rekonstrukcija koristeći konvoluciju."""
+    """Vektorizovana rekonstrukcija."""
     if len(image.shape) == 3:
         h, w, c = image.shape
         result = np.zeros_like(image)
@@ -112,8 +112,12 @@ def bilinear_reconstruct_channel_vectorized(channel, missing_mask):
         neighborhood = channel[i_min:i_max, j_min:j_max]
         neighborhood_mask = missing_mask[i_min:i_max, j_min:j_max]
         
+        # Ravnaj za indeksiranje
+        neighborhood_flat = neighborhood.ravel()
+        neighborhood_mask_flat = neighborhood_mask.ravel()
+        
         # Ukloni nedostajuće piksele iz okoline
-        valid_values = neighborhood[~neighborhood_mask]
+        valid_values = neighborhood_flat[~neighborhood_mask_flat]
         
         if len(valid_values) > 0:
             output[i, j] = np.mean(valid_values)

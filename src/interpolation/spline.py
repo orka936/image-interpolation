@@ -29,7 +29,7 @@ def spline_upscale_fast(image, scale_factor):
             x_new = np.linspace(0, w-1, new_w)
             
             for row in range(h):
-                # Koristi NumPy interpolaciju za brzinu (linear je dovoljno brz)
+                # Koristi NumPy interpolaciju za brzinu
                 temp[row, :] = np.interp(x_new, x_old, channel[row, :])
             
             # 2. Interpolacija po kolonama
@@ -108,12 +108,16 @@ def spline_reconstruct_channel_fast(channel, missing_mask):
             neighborhood = output[i_min:i_max, j_min:j_max]
             neighborhood_mask = remaining_mask[i_min:i_max, j_min:j_max]
             
+            # Ravnaj za indeksiranje
+            neighborhood_flat = neighborhood.ravel()
+            neighborhood_mask_flat = neighborhood_mask.ravel()
+            
             # Broj validnih suseda
-            valid_count = np.sum(~neighborhood_mask)
+            valid_count = np.sum(~neighborhood_mask_flat)
             
             if valid_count >= 3:
                 # Izračunaj vrednost na osnovu suseda
-                valid_values = neighborhood[~neighborhood_mask]
+                valid_values = neighborhood_flat[~neighborhood_mask_flat]
                 output[i, j] = np.mean(valid_values)
                 remaining_mask[i, j] = False
                 filled_count += 1
@@ -138,7 +142,11 @@ def spline_reconstruct_channel_fast(channel, missing_mask):
             neighborhood = output[i_min:i_max, j_min:j_max]
             neighborhood_mask = remaining_mask[i_min:i_max, j_min:j_max]
             
-            valid_values = neighborhood[~neighborhood_mask]
+            # Ravnaj za indeksiranje
+            neighborhood_flat = neighborhood.ravel()
+            neighborhood_mask_flat = neighborhood_mask.ravel()
+            
+            valid_values = neighborhood_flat[~neighborhood_mask_flat]
             
             if len(valid_values) > 0:
                 output[i, j] = np.mean(valid_values)
