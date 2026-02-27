@@ -1,6 +1,6 @@
 import numpy as np
 
-def spline_interpolation(image, scale_factor=4, missing_mask=None):
+def spline_interpolation(image, scale_factor=3, missing_mask=None):
     """Kubna spline interpolacija za uvecanje ili rekonstrukciju."""
     image = np.asarray(image, dtype=np.float32)
 

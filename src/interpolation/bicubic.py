@@ -19,7 +19,7 @@ def reflect_indices(indices, size):
     reflected = np.where(indices_mod < size, indices_mod, period - indices_mod)
     return reflected.astype(np.int32)
 
-def bicubic_interpolation(image, scale_factor=4, missing_mask=None):
+def bicubic_interpolation(image, scale_factor=3, missing_mask=None):
     """Bikubna interpolacija za uvecanje ili rekonstrukciju."""
     image = np.asarray(image, dtype=np.float32)
 
