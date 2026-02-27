@@ -1,220 +1,160 @@
 import numpy as np
-from collections import defaultdict
 
-def cubic_interpolate(p, x):
-    """
-    Catmull-Rom kubna interpolacija za 1D niz od 4 tačke.
-    """
-    return p[1] + 0.5 * x * (p[2] - p[0] + 
-                            x * (2.0 * p[0] - 5.0 * p[1] + 4.0 * p[2] - p[3] + 
-                                x * (3.0 * p[1] - p[0] - 3.0 * p[2] + p[3])))
+def cubic_weights_catmull_rom(t):
+    """Catmull-Rom tezine za offsete [-1, 0, 1, 2]."""
+    t2 = t * t
+    t3 = t2 * t
+    w0 = -0.5 * t + t2 - 0.5 * t3
+    w1 = 1.0 - 2.5 * t2 + 1.5 * t3
+    w2 = 0.5 * t + 2.0 * t2 - 1.5 * t3
+    w3 = -0.5 * t2 + 0.5 * t3
+    return np.stack((w0, w1, w2, w3), axis=-1)
+
+def reflect_indices(indices, size):
+    """Refleksija indeksa preko granica slike."""
+    if size <= 1:
+        return np.zeros_like(indices, dtype=np.int32)
+    period = 2 * size - 2
+    indices_mod = np.mod(indices, period)
+    reflected = np.where(indices_mod < size, indices_mod, period - indices_mod)
+    return reflected.astype(np.int32)
 
 def bicubic_interpolation(image, scale_factor=4, missing_mask=None):
-    """
-    Optimizovana bikubna interpolacija sa delimičnom vektorizacijom.
-    """
+    """Bikubna interpolacija za uvecanje ili rekonstrukciju."""
+    image = np.asarray(image, dtype=np.float32)
+
+    if scale_factor <= 0:
+        raise ValueError("scale_factor mora biti pozitivan broj.")
+
     if missing_mask is None:
         return bicubic_upscale_optimized(image, scale_factor)
-    else:
-        return bicubic_reconstruct_optimized(image, missing_mask)
+    return bicubic_reconstruct_optimized(image, missing_mask)
 
 def bicubic_upscale_optimized(image, scale_factor):
-    """Optimizovana bikubna interpolacija."""
+    """Vektorizovana separabilna bikubna interpolacija."""
     if len(image.shape) == 3:
         h, w, c = image.shape
-        new_h, new_w = int(h * scale_factor), int(w * scale_factor)
-        
-        # Kreiraj mrežu koordinata
-        x_new = np.linspace(0, w-1, new_w)
-        y_new = np.linspace(0, h-1, new_h)
-        
-        # Indeksi centralnih piksela
-        xi = np.floor(x_new).astype(int)
-        yi = np.floor(y_new).astype(int)
-        
-        # Relativne pozicije unutar ćelije
-        dx = x_new - xi
-        dy = y_new - yi
-        
-        # Ograniči indekse
-        xi = np.clip(xi, 0, w-1)
-        yi = np.clip(yi, 0, h-1)
-        
-        result = np.zeros((new_h, new_w, c), dtype=np.float32)
-        
-        # Za svaki kanal
+        result = np.empty((int(h * scale_factor), int(w * scale_factor), c), dtype=np.float32)
+
         for ch in range(c):
-            channel = image[:, :, ch]
-            output_channel = np.zeros((new_h, new_w), dtype=np.float32)
-            
-            # Za svaki red u izlaznoj slici
-            for i in range(new_h):
-                y = yi[i]
-                dy_i = dy[i]
-                
-                # Uzmi 4 reda okoline
-                rows = []
-                for m in range(-1, 3):
-                    row_idx = y + m
-                    # Reflektuj ivice
-                    if row_idx < 0:
-                        row_idx = -row_idx
-                    elif row_idx >= h:
-                        row_idx = 2 * h - row_idx - 2
-                    rows.append(channel[row_idx, :])
-                
-                # Interpolacija po kolonama za ovaj red
-                for j in range(new_w):
-                    x = xi[j]
-                    dx_j = dx[j]
-                    
-                    # Uzmi 4 kolone
-                    values = np.zeros(4)
-                    for n in range(4):
-                        col_idx = x + (n - 1)  # -1, 0, 1, 2
-                        # Reflektuj ivice
-                        if col_idx < 0:
-                            col_idx = -col_idx
-                        elif col_idx >= w:
-                            col_idx = 2 * w - col_idx - 2
-                        values[n] = rows[n][col_idx]
-                    
-                    # Interpolacija
-                    output_channel[i, j] = cubic_interpolate(values, dx_j)
-            
-            result[:, :, ch] = output_channel
-        
+            result[:, :, ch] = _bicubic_upscale_channel(image[:, :, ch], scale_factor)
         return result
-    else:
-        # Za jednokanalne slike
-        h, w = image.shape
-        new_h, new_w = int(h * scale_factor), int(w * scale_factor)
-        
-        x_new = np.linspace(0, w-1, new_w)
-        y_new = np.linspace(0, h-1, new_h)
-        
-        xi = np.floor(x_new).astype(int)
-        yi = np.floor(y_new).astype(int)
-        
-        dx = x_new - xi
-        dy = y_new - yi
-        
-        xi = np.clip(xi, 0, w-1)
-        yi = np.clip(yi, 0, h-1)
-        
-        output = np.zeros((new_h, new_w), dtype=np.float32)
-        
-        # Koristi memoizaciju za redove
-        row_cache = {}
-        
-        for i in range(new_h):
-            y = yi[i]
-            dy_i = dy[i]
-            
-            # Uzmi ili izračunaj 4 reda
-            rows = []
-            for m in range(-1, 3):
-                row_idx = y + m
-                # Reflektuj ivice
-                if row_idx < 0:
-                    row_idx = -row_idx
-                elif row_idx >= h:
-                    row_idx = 2 * h - row_idx - 2
-                
-                # Proveri cache
-                if row_idx in row_cache:
-                    rows.append(row_cache[row_idx])
-                else:
-                    rows.append(image[row_idx, :])
-                    row_cache[row_idx] = image[row_idx, :]
-            
-            # Interpolacija po kolonama
-            for j in range(new_w):
-                x = xi[j]
-                dx_j = dx[j]
-                
-                # Uzmi vrednosti iz 4 kolone
-                values = np.array([
-                    rows[0][max(0, min(x-1, w-1))],
-                    rows[1][max(0, min(x, w-1))],
-                    rows[2][max(0, min(x+1, w-1))],
-                    rows[3][max(0, min(x+2, w-1))]
-                ])
-                
-                output[i, j] = cubic_interpolate(values, dx_j)
-        
-        return output
+
+    return _bicubic_upscale_channel(image, scale_factor)
+
+def _bicubic_upscale_channel(channel, scale_factor):
+    """Bikubno uvecanje jednog kanala."""
+    h, w = channel.shape
+    new_h, new_w = int(h * scale_factor), int(w * scale_factor)
+
+    x_new = np.linspace(0, w - 1, new_w, dtype=np.float32)
+    y_new = np.linspace(0, h - 1, new_h, dtype=np.float32)
+
+    xi = np.floor(x_new).astype(np.int32)
+    yi = np.floor(y_new).astype(np.int32)
+    tx = x_new - xi
+    ty = y_new - yi
+
+    x_idx = reflect_indices(xi[:, None] + np.array([-1, 0, 1, 2], dtype=np.int32), w)
+    y_idx = reflect_indices(yi[:, None] + np.array([-1, 0, 1, 2], dtype=np.int32), h)
+
+    wx = cubic_weights_catmull_rom(tx)
+    wy = cubic_weights_catmull_rom(ty)
+
+    # 1) Interpolacija po x-osi za sve redove
+    temp = np.zeros((h, new_w), dtype=np.float32)
+    for k in range(4):
+        temp += channel[:, x_idx[:, k]] * wx[:, k]
+
+    # 2) Interpolacija po y-osi
+    output = np.zeros((new_h, new_w), dtype=np.float32)
+    for k in range(4):
+        output += wy[:, k][:, None] * temp[y_idx[:, k], :]
+
+    return output
 
 def bicubic_reconstruct_optimized(image, missing_mask):
-    """Optimizovana rekonstrukcija."""
+    """Rekonstrukcija lokalnim ponderisanim kubnim popunjavanjem."""
+    missing_mask = np.asarray(missing_mask, dtype=bool)
+
+    if image.shape[:2] != missing_mask.shape:
+        raise ValueError("missing_mask mora imati iste dimenzije HxW kao slika.")
+
     if len(image.shape) == 3:
-        h, w, c = image.shape
-        result = np.zeros_like(image)
-        
+        _, _, c = image.shape
+        result = np.empty_like(image, dtype=np.float32)
         for ch in range(c):
             result[:, :, ch] = bicubic_reconstruct_channel_optimized(image[:, :, ch], missing_mask)
-        
+
         return result
-    else:
-        return bicubic_reconstruct_channel_optimized(image, missing_mask)
+
+    return bicubic_reconstruct_channel_optimized(image, missing_mask)
 
 def bicubic_reconstruct_channel_optimized(channel, missing_mask):
-    """Rekonstrukcija sa vektorizovanom obradom."""
-    h, w = channel.shape
-    output = channel.copy()
-    
-    # Pronađi nedostajuće piksele
-    missing_y, missing_x = np.where(missing_mask)
-    
-    if len(missing_y) == 0:
+    """Iterativna rekonstrukcija sa distancnim ponderisanjem."""
+    output = np.asarray(channel, dtype=np.float32).copy()
+    remaining_mask = missing_mask.copy()
+
+    if not np.any(remaining_mask):
         return output
-    
-    # Grupiši po redovima za bolju lokalnost
-    rows_dict = defaultdict(list)
-    
-    for idx in range(len(missing_y)):
-        rows_dict[missing_y[idx]].append(missing_x[idx])
-    
-    # Obradi red po red
-    for y in sorted(rows_dict.keys()):
-        x_list = rows_dict[y]
-        
-        for x in x_list:
-            # Definiši 5x5 okolinu
-            y_min, y_max = max(0, y-2), min(h, y+3)
-            x_min, x_max = max(0, x-2), min(w, x+3)
-            
-            # Izvuci okolinu
-            neighborhood = channel[y_min:y_max, x_min:x_max]
-            neighborhood_mask = missing_mask[y_min:y_max, x_min:x_max]
-            
-            # Ravnaj oba niza za indeksiranje
-            neighborhood_flat = neighborhood.ravel()
-            neighborhood_mask_flat = neighborhood_mask.ravel()
-            
-            # Ukloni nedostajuće piksele
-            valid_values = neighborhood_flat[~neighborhood_mask_flat]
-            
-            if len(valid_values) > 0:
-                # Ponderisani prosek (bliži pikseli imaju veću težinu)
-                # Kreiraj mrežu koordinata za celu okolinu
-                y_coords, x_coords = np.meshgrid(
-                    np.arange(y_min, y_max),
-                    np.arange(x_min, x_max),
-                    indexing='ij'
-                )
-                
-                # Izračunaj udaljenosti od centra
-                distances = np.sqrt((y_coords - y)**2 + (x_coords - x)**2)
-                distances_flat = distances.ravel()
-                
-                # Ukloni nedostajuće piksele iz udaljenosti
-                valid_distances = distances_flat[~neighborhood_mask_flat]
-                
-                # Inverzna težinska funkcija
-                weights = 1.0 / (valid_distances + 1e-6)
-                weights = weights / np.sum(weights)
-                
-                output[y, x] = np.dot(valid_values, weights)
-    
+
+    max_iterations = max(10, int(np.sqrt(output.shape[0] * output.shape[1]) // 2))
+    for _ in range(max_iterations):
+        missing_points = np.argwhere(remaining_mask)
+        if missing_points.size == 0:
+            break
+
+        filled_count = 0
+        for i, j in missing_points:
+            value = _distance_weighted_fill(output, remaining_mask, i, j, max_radius=3, power=2.0)
+            if value is not None:
+                output[i, j] = value
+                remaining_mask[i, j] = False
+                filled_count += 1
+
+        if filled_count == 0:
+            break
+
+    if np.any(remaining_mask):
+        valid_values = output[~remaining_mask]
+        fallback = np.mean(valid_values) if valid_values.size > 0 else 0.0
+        output[remaining_mask] = fallback
+
     return output
+
+def _distance_weighted_fill(image, missing_mask, i, j, max_radius=3, power=2.0):
+    """Vraca interpoliranu vrednost ili None ako nema validnih suseda."""
+    h, w = image.shape
+    values = []
+    weights = []
+
+    for radius in range(1, max_radius + 1):
+        i_min, i_max = max(0, i - radius), min(h, i + radius + 1)
+        j_min, j_max = max(0, j - radius), min(w, j + radius + 1)
+
+        block = image[i_min:i_max, j_min:j_max]
+        block_mask = missing_mask[i_min:i_max, j_min:j_max]
+        if np.all(block_mask):
+            continue
+
+        yy, xx = np.meshgrid(
+            np.arange(i_min, i_max),
+            np.arange(j_min, j_max),
+            indexing="ij",
+        )
+        dist = np.sqrt((yy - i) ** 2 + (xx - j) ** 2)
+        valid = (~block_mask) & (dist > 0)
+        if np.any(valid):
+            valid_dist = dist[valid]
+            valid_vals = block[valid]
+            w_local = 1.0 / (valid_dist ** power)
+            values.append(valid_vals)
+            weights.append(w_local)
+
+    if not values:
+        return None
+
+    all_values = np.concatenate(values)
+    all_weights = np.concatenate(weights)
+    all_weights /= np.sum(all_weights)
+    return float(np.sum(all_values * all_weights))

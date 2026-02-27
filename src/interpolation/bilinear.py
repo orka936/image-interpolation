@@ -1,13 +1,15 @@
 import numpy as np
 
 def bilinear_interpolation(image, scale_factor=4, missing_mask=None):
-    """
-    Optimizovana bilinearna interpolacija sa vektorizacijom.
-    """
+    """Bilinearna interpolacija za uvecanje ili rekonstrukciju."""
+    image = np.asarray(image, dtype=np.float32)
+
+    if scale_factor <= 0:
+        raise ValueError("scale_factor mora biti pozitivan broj.")
+
     if missing_mask is None:
         return bilinear_upscale_vectorized(image, scale_factor)
-    else:
-        return bilinear_reconstruct_vectorized(image, missing_mask)
+    return bilinear_reconstruct_vectorized(image, missing_mask)
 
 def bilinear_upscale_vectorized(image, scale_factor):
     """Potpuno vektorizovana bilinearna interpolacija."""
@@ -30,7 +32,7 @@ def bilinear_upscale_vectorized(image, scale_factor):
         wy = y - y0
         
         # 3D interpolacija - obrađujemo sve kanale odjednom
-        result = np.zeros((new_h, new_w, c), dtype=np.float32)
+        result = np.empty((new_h, new_w, c), dtype=np.float32)
         
         for ch in range(c):
             channel = image[:, :, ch]
@@ -48,78 +50,117 @@ def bilinear_upscale_vectorized(image, scale_factor):
                                wy[:, None] * wx * q11
         
         return result
-    else:
-        # Za jednokanalne slike
-        h, w = image.shape
-        new_h, new_w = int(h * scale_factor), int(w * scale_factor)
-        
-        x = np.linspace(0, w-1, new_w)
-        y = np.linspace(0, h-1, new_h)
-        
-        x0 = np.floor(x).astype(int)
-        x1 = np.minimum(x0 + 1, w - 1)
-        y0 = np.floor(y).astype(int)
-        y1 = np.minimum(y0 + 1, h - 1)
-        
-        wx = x - x0
-        wy = y - y0
-        
-        q00 = image[y0[:, None], x0]
-        q10 = image[y1[:, None], x0]
-        q01 = image[y0[:, None], x1]
-        q11 = image[y1[:, None], x1]
-        
-        return (1 - wy[:, None]) * (1 - wx) * q00 + \
-               wy[:, None] * (1 - wx) * q10 + \
-               (1 - wy[:, None]) * wx * q01 + \
-               wy[:, None] * wx * q11
+
+    # Za jednokanalne slike
+    h, w = image.shape
+    new_h, new_w = int(h * scale_factor), int(w * scale_factor)
+
+    x = np.linspace(0, w - 1, new_w)
+    y = np.linspace(0, h - 1, new_h)
+
+    x0 = np.floor(x).astype(int)
+    x1 = np.minimum(x0 + 1, w - 1)
+    y0 = np.floor(y).astype(int)
+    y1 = np.minimum(y0 + 1, h - 1)
+
+    wx = x - x0
+    wy = y - y0
+
+    q00 = image[y0[:, None], x0]
+    q10 = image[y1[:, None], x0]
+    q01 = image[y0[:, None], x1]
+    q11 = image[y1[:, None], x1]
+
+    return (
+        (1 - wy[:, None]) * (1 - wx) * q00
+        + wy[:, None] * (1 - wx) * q10
+        + (1 - wy[:, None]) * wx * q01
+        + wy[:, None] * wx * q11
+    )
 
 def bilinear_reconstruct_vectorized(image, missing_mask):
-    """Vektorizovana rekonstrukcija."""
+    """Rekonstrukcija iterativnim lokalnim popunjavanjem."""
+    missing_mask = np.asarray(missing_mask, dtype=bool)
+
+    if image.shape[:2] != missing_mask.shape:
+        raise ValueError("missing_mask mora imati iste dimenzije HxW kao slika.")
+
     if len(image.shape) == 3:
-        h, w, c = image.shape
-        result = np.zeros_like(image)
+        _, _, c = image.shape
+        result = np.empty_like(image, dtype=np.float32)
         
         for ch in range(c):
             result[:, :, ch] = bilinear_reconstruct_channel_vectorized(image[:, :, ch], missing_mask)
-        
+
         return result
-    else:
-        return bilinear_reconstruct_channel_vectorized(image, missing_mask)
+    return bilinear_reconstruct_channel_vectorized(image, missing_mask)
 
 def bilinear_reconstruct_channel_vectorized(channel, missing_mask):
-    """Rekonstrukcija koristeći vektorizovano filtriranje."""
-    h, w = channel.shape
-    
-    # Kreiraj kopiju
-    output = channel.copy()
-    
-    # Pronađi sve nedostajuće piksele
-    missing_y, missing_x = np.where(missing_mask)
-    
-    if len(missing_y) == 0:
+    """Rekonstrukcija distance-weighted prosekom suseda."""
+    output = np.asarray(channel, dtype=np.float32).copy()
+    remaining_mask = missing_mask.copy()
+
+    if not np.any(remaining_mask):
         return output
-    
-    # Za svaki nedostajući piksel, izračunaj prosek suseda
-    for idx in range(len(missing_y)):
-        i, j = missing_y[idx], missing_x[idx]
-        
-        # Definiši okolinu 3x3
-        i_min, i_max = max(0, i-1), min(h, i+2)
-        j_min, j_max = max(0, j-1), min(w, j+2)
-        
-        # Izvuci okolinu
-        neighborhood = channel[i_min:i_max, j_min:j_max]
-        neighborhood_mask = missing_mask[i_min:i_max, j_min:j_max]
-        
-        # Ravnaj za indeksiranje
-        neighborhood_flat = neighborhood.ravel()
-        neighborhood_mask_flat = neighborhood_mask.ravel()
-        
-        # Ukloni nedostajuće piksele iz okoline
-        valid_values = neighborhood_flat[~neighborhood_mask_flat]
-        
-        if len(valid_values) > 0:
-            output[i, j] = np.mean(valid_values)
-    
+
+    max_iterations = max(8, int(np.sqrt(output.shape[0] * output.shape[1]) // 2))
+    for _ in range(max_iterations):
+        missing_points = np.argwhere(remaining_mask)
+        if missing_points.size == 0:
+            break
+
+        filled_count = 0
+        for i, j in missing_points:
+            value = _distance_weighted_fill(output, remaining_mask, i, j, max_radius=2)
+            if value is not None:
+                output[i, j] = value
+                remaining_mask[i, j] = False
+                filled_count += 1
+
+        if filled_count == 0:
+            break
+
+    if np.any(remaining_mask):
+        valid_values = output[~remaining_mask]
+        fallback = np.mean(valid_values) if valid_values.size > 0 else 0.0
+        output[remaining_mask] = fallback
+
     return output
+
+def _distance_weighted_fill(image, missing_mask, i, j, max_radius=2):
+    """Vraca interpoliranu vrednost ili None ako nema validnih suseda."""
+    h, w = image.shape
+    values = []
+    weights = []
+
+    for radius in range(1, max_radius + 1):
+        i_min, i_max = max(0, i - radius), min(h, i + radius + 1)
+        j_min, j_max = max(0, j - radius), min(w, j + radius + 1)
+
+        block = image[i_min:i_max, j_min:j_max]
+        block_mask = missing_mask[i_min:i_max, j_min:j_max]
+        if np.all(block_mask):
+            continue
+
+        yy, xx = np.meshgrid(
+            np.arange(i_min, i_max),
+            np.arange(j_min, j_max),
+            indexing="ij",
+        )
+        dist = np.sqrt((yy - i) ** 2 + (xx - j) ** 2)
+        valid = (~block_mask) & (dist > 0)
+
+        if np.any(valid):
+            valid_dist = dist[valid]
+            valid_vals = block[valid]
+            w_local = 1.0 / valid_dist
+            values.append(valid_vals)
+            weights.append(w_local)
+
+    if not values:
+        return None
+
+    all_values = np.concatenate(values)
+    all_weights = np.concatenate(weights)
+    all_weights /= np.sum(all_weights)
+    return float(np.sum(all_values * all_weights))
