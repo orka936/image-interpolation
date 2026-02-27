@@ -314,7 +314,7 @@ validation loss ne poboljša 3 uzastopne epohe.
 
 Gradijenti se računaju automatski pozivom `loss.backward()` primenom
 **chain rule** (pravilo lanca diferenciranja). Dodatno, primenjuje se
-**gradient clipping** ($\text{max\_norm} = 1.0$) koji sprečava eksploziju gradijenata.
+**gradient clipping** koji sprečava eksploziju gradijenata.
 
 Rezidualna veza omogućava direktan protok gradijenta od izlaza do ulaza,
 čime se ublažava problem nestajućih gradijenata.
