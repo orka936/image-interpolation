@@ -31,17 +31,34 @@ Sve navedene numeričke interpolacione metode su implementirane ručno,
 bez korišćenja ugrađenih funkcija biblioteka za obradu slike, u cilju detaljne
 analize njihovih numeričkih osobina i uticaja na kvalitet rekonstruisane slike.
 
-## 2. Podaci
+## 2. Skup podataka
 
-Za trening neuronske mreže koristi se skup od **800 slika** (DIV2K dataset),
-smeštenih u `data/train/original/`. Degradirane (niskorezolucione) verzije
-generišu se automatski bicubic downsampling-om sa faktorom 3
-(`data/train/degraded/`).
+### 2.1. Trening skup — DIV2K
 
-Za evaluaciju i benchmark koristi se skup od **14 klasičnih test slika**
-(Set14: baboon, barbara, bridge, coastguard, comic, face, flowers, foreman,
-lenna, man, monarch, pepper, ppt3, zebra), smeštenih u
-`data/input/original/` i `data/input/degraded/`.
+Za trening neuronske mreže koristi se **DIV2K** (DIVerse 2K resolution image dataset),
+standardni benchmark dataset za super-rezoluciju koji sadrži **800 slika** visoke
+rezolucije (oko 2040×1400 piksela). Slike pokrivaju raznovrsne scene: pejzaže,
+arhitekturu, ljude, životinje i objekte.
+
+Originalne HR slike smeštene su u `data/train/original/`. Degradirane
+(niskorezolucione) verzije generišu se automatski bicubic downsampling-om sa
+faktorom 3 i čuvaju u `data/train/degraded/`.
+
+- Izvor: https://data.vision.ee.ethz.ch/cvl/DIV2K/
+- Referenca: Agustsson, E. & Timofte, R. (2017). "NTIRE 2017 Challenge on Single
+  Image Super-Resolution: Dataset and Study". CVPR Workshops.
+
+### 2.2. Test skup — Set14
+
+Za evaluaciju i benchmark koristi se **Set14**, standardni test skup za
+super-rezoluciju koji sadrži **14 klasičnih slika** različitih karakteristika
+(oko 300–500 piksela): baboon, barbara, bridge, coastguard, comic, face,
+flowers, foreman, lenna, man, monarch, pepper, ppt3, zebra.
+
+Test slike smeštene su u `data/input/original/` i `data/input/degraded/`.
+
+- Izvor: Zeyde, R., Elad, M. & Protter, M. (2012). "On Single Image Scale-Up
+  Using Sparse-Representations". Curves and Surfaces.
 
 U korisničkom režimu rada, korisnik za ulazne podatke prosleđuje
 digitalnu sliku u RGB formatu (PNG ili JPEG) putem foldera `user/input/`.
@@ -204,14 +221,23 @@ svaku kolonu rezultata.
 ### 3.4. Neuronska mreža (SRCNN)
 
 Neuronska mreža korišćena u projektu zasniva se na **SRCNN**
-(Super-Resolution Convolutional Neural Network) arhitekturi,
-koja predstavlja konvolucionu neuronsku mrežu
-namenjenu rešavanju problema super-rezolucije slika. U okviru
+(Super-Resolution Convolutional Neural Network) arhitekturi (Dong et al., 2014),
+koja predstavlja jednu od prvih konvolucionih neuronskih mreža
+primenjenih na problem super-rezolucije slika. U okviru
 projekta, neuronska mreža koristi se kao dodatni korak nakon
-klasične interpolacije, pri čemu interpolisana slika (Y kanal)
+klasične interpolacije, pri čemu interpolisana slika (**Y kanal** luminanse)
 predstavlja ulaz mreže. Na ovaj način, neuronska mreža uči da
 koriguje greške koje nastaju primenom interpolacionih metoda i da
 poboljša kvalitet rekonstruisane slike.
+
+> **Napomena o ograničenjima modela:** SRCNN je istorijski značajan kao
+> prvi uspešan pristup primene dubokog učenja na super-rezoluciju, ali
+> predstavlja veoma jednostavan model sa svega **~57.000 parametara**
+> (3 konvoluciona sloja). U ovom projektu SRCNN služi kao **teorijska osnova
+> i demonstracija** primene neuronske mreže u kontekstu rekonstrukcije slike,
+> a ne kao realan standard za produkcijsku upotrebu. Savremeni modeli za
+> super-rezoluciju (EDSR, RCAN, SwinIR) koriste značajno dublje arhitekture
+> sa milionima parametara i postižu znatno bolje rezultate.
 
 #### Arhitektura
 
